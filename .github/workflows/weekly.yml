@@ -73,49 +73,57 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Verify signing key
+      - name: Verify and decode signing key
         id: verify_signing
-        shell: bash
-        env:
-          SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
-          KEY_STORE_PASSWORD: ${{ secrets.KEY_STORE_PASSWORD }}
-        run: |
-          if [ -z "$SIGNING_KEY" ]; then
-            echo "Error: SIGNING_KEY secret is not set"
-            exit 1
-          fi
-          if [ -z "$KEY_STORE_PASSWORD" ]; then
-            echo "Error: KEY_STORE_PASSWORD secret is not set"
-            exit 1
-          fi
-          printf '%s' "$SIGNING_KEY" | base64 -d > /tmp/keystore.jks
-          keytool -list -keystore /tmp/keystore.jks -storepass "$KEY_STORE_PASSWORD" >/dev/null
-          echo "signing_key_valid=true" >> "$GITHUB_OUTPUT"
-
-      - name: Verify alias
-        id: verify_alias
         shell: bash
         env:
           SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
           KEY_STORE_PASSWORD: ${{ secrets.KEY_STORE_PASSWORD }}
           ALIAS: ${{ secrets.ALIAS }}
         run: |
-          printf '%s' "$SIGNING_KEY" | base64 -d > /tmp/keystore.jks
-          keytool -list -keystore /tmp/keystore.jks -storepass "$KEY_STORE_PASSWORD" -alias "$ALIAS"
-          echo "alias_valid=true" >> "$GITHUB_OUTPUT"
+          set -e
+
+          if [ -z "$SIGNING_KEY" ]; then
+            echo "::error::SIGNING_KEY secret is not set"
+            exit 1
+          fi
+          if [ -z "$KEY_STORE_PASSWORD" ]; then
+            echo "::error::KEY_STORE_PASSWORD secret is not set"
+            exit 1
+          fi
+          if [ -z "$ALIAS" ]; then
+            echo "::error::ALIAS secret is not set"
+            exit 1
+          fi
+
+          KEYSTORE_PATH="$RUNNER_TEMP/keystore.jks"
+          printf '%s' "$SIGNING_KEY" | base64 -d > "$KEYSTORE_PATH"
+
+          if ! keytool -list -keystore "$KEYSTORE_PATH" -storepass "$KEY_STORE_PASSWORD" >/dev/null 2>&1; then
+            echo "::error::Failed to open keystore with provided KEY_STORE_PASSWORD"
+            exit 1
+          fi
+
+          if ! keytool -list -keystore "$KEYSTORE_PATH" -storepass "$KEY_STORE_PASSWORD" -alias "$ALIAS" >/dev/null 2>&1; then
+            echo "::error::Alias '$ALIAS' not found in keystore"
+            exit 1
+          fi
+
+          echo "keystore_path=$KEYSTORE_PATH" >> "$GITHUB_OUTPUT"
+          echo "signing_key_valid=true" >> "$GITHUB_OUTPUT"
 
       - name: Build app
-        if: steps.verify_signing.outputs.signing_key_valid == 'true' && steps.verify_alias.outputs.alias_valid == 'true'
+        if: steps.verify_signing.outputs.signing_key_valid == 'true'
         run: ./gradlew assembleRelease -Pinclude-telemetry -Penable-updater
         env:
-          MIHON_GITHUB_RELEASE: true
-          storeFileBase64: ${{ secrets.SIGNING_KEY }}
+          MIHON_GITHUB_RELEASE: "true"
+          storeFile: ${{ steps.verify_signing.outputs.keystore_path }}
           storePassword: ${{ secrets.KEY_STORE_PASSWORD }}
           keyAlias: ${{ secrets.ALIAS }}
           keyPassword: ${{ secrets.KEY_PASSWORD }}
 
       - name: Upload APK as artifact
-        if: steps.verify_signing.outputs.signing_key_valid == 'true' && steps.verify_alias.outputs.alias_valid == 'true'
+        if: steps.verify_signing.outputs.signing_key_valid == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: mihon-arm64-weekly-${{ steps.version.outputs.commit_hash }}
@@ -124,7 +132,7 @@ jobs:
 
       - name: Generate release notes
         id: release_notes
-        if: steps.verify_signing.outputs.signing_key_valid == 'true' && steps.verify_alias.outputs.alias_valid == 'true'
+        if: steps.verify_signing.outputs.signing_key_valid == 'true'
         run: |
           LAST_TAG=$(git tag --sort=-version:refname | head -n1 || echo "")
           if [ -n "$LAST_TAG" ]; then
@@ -150,7 +158,7 @@ jobs:
 
       - name: Create/Update Release
         id: create_release
-        if: steps.verify_signing.outputs.signing_key_valid == 'true' && steps.verify_alias.outputs.alias_valid == 'true'
+        if: steps.verify_signing.outputs.signing_key_valid == 'true'
         env:
           GH_TOKEN: ${{ secrets.PAT_WEEKLY }}
         run: |
@@ -173,7 +181,7 @@ jobs:
           echo "release_tag=$TAG_NAME" >> $GITHUB_OUTPUT
 
       - name: Keep only latest 5 releases
-        if: steps.verify_signing.outputs.signing_key_valid == 'true' && steps.verify_alias.outputs.alias_valid == 'true'
+        if: steps.verify_signing.outputs.signing_key_valid == 'true'
         env:
           GH_TOKEN: ${{ secrets.PAT_WEEKLY }}
         run: |
@@ -201,7 +209,7 @@ jobs:
           else
             echo "- New commits: ⏭️ No new commits" >> $GITHUB_STEP_SUMMARY
           fi
-          if [ "${{ steps.verify_signing.outputs.signing_key_valid }}" == "true" ] && [ "${{ steps.verify_alias.outputs.alias_valid }}" == "true" ]; then
+          if [ "${{ steps.verify_signing.outputs.signing_key_valid }}" == "true" ]; then
             echo "- APK Artifact: ✅ Uploaded" >> $GITHUB_STEP_SUMMARY
             if [ "${{ steps.create_release.outputs.release_created }}" == "true" ]; then
               echo "- Release: ✅ Created \`${{ steps.create_release.outputs.release_tag }}\`" >> $GITHUB_STEP_SUMMARY
@@ -214,8 +222,8 @@ jobs:
             echo "- Release: ❌ Skipped (signing verification failed)" >> $GITHUB_STEP_SUMMARY
           fi
 
-      - name: Skip build - Verification failed
-        if: steps.verify_signing.outputs.signing_key_valid != 'true' || steps.verify_alias.outputs.alias_valid != 'true'
+      - name: Fail if verification failed
+        if: steps.verify_signing.outputs.signing_key_valid != 'true'
         run: |
           echo "Build skipped due to signing key verification failure"
           exit 1
@@ -224,5 +232,6 @@ jobs:
         if: always()
         run: |
           rm -rf /tmp/keystore.jks
+          rm -f "$RUNNER_TEMP/keystore.jks"
           rm -rf app/build
           rm -f release_notes.md
