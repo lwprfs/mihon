@@ -17,6 +17,8 @@ import dev.zacsweers.metrox.viewmodel.ViewModelAssistedFactory
 import dev.zacsweers.metrox.viewmodel.ViewModelAssistedFactoryKey
 import eu.kanade.domain.base.BasePreferences
 import eu.kanade.domain.chapter.model.toSChapter
+import eu.kanade.domain.chapter.model.withoutCustomExcluded
+import eu.kanade.domain.manga.interactor.GetExcludedScanlators
 import eu.kanade.domain.manga.interactor.SetMangaViewerFlags
 import eu.kanade.domain.manga.interactor.UpdateManga
 import eu.kanade.domain.manga.model.readerOrientation
@@ -116,6 +118,7 @@ class ReaderViewModel(
     private val trackChapter: TrackChapter,
     private val getManga: GetManga,
     private val getChaptersByMangaId: GetChaptersByMangaId,
+    private val getExcludedScanlators: GetExcludedScanlators,
     private val getNextChapters: GetNextChapters,
     private val upsertHistory: UpsertHistory,
     private val updateChapter: UpdateChapter,
@@ -219,7 +222,9 @@ class ReaderViewModel(
 
     private suspend fun loadChapterList(): List<ReaderChapter> {
         val manga = manga!!
+        val excludedScanlators = getExcludedScanlators.await(manga.id)
         val chapters = getChaptersByMangaId.await(manga.id, applyScanlatorFilter = true)
+            .withoutCustomExcluded(excludedScanlators)
             .let { filtered ->
                 if (filtered.any { it.id == chapterId }) {
                     filtered

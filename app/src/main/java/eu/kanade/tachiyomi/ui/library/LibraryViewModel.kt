@@ -16,6 +16,8 @@ import eu.kanade.core.preference.asState
 import eu.kanade.core.util.fastFilterNot
 import eu.kanade.domain.base.BasePreferences
 import eu.kanade.domain.chapter.interactor.SetReadStatus
+import eu.kanade.domain.chapter.model.withoutCustomExcluded
+import eu.kanade.domain.manga.interactor.GetExcludedScanlators
 import eu.kanade.domain.manga.interactor.UpdateManga
 import eu.kanade.presentation.library.components.LibraryToolbarTitle
 import eu.kanade.presentation.manga.DownloadAction
@@ -87,6 +89,7 @@ class LibraryViewModel(
     private val getTracksPerManga: GetTracksPerManga,
     private val getNextChapters: GetNextChapters,
     private val getChaptersByMangaId: GetChaptersByMangaId,
+    private val getExcludedScanlators: GetExcludedScanlators,
     private val getBookmarkedChaptersByMangaId: GetBookmarkedChaptersByMangaId,
     private val setReadStatus: SetReadStatus,
     private val updateManga: UpdateManga,
@@ -490,6 +493,7 @@ class LibraryViewModel(
 
     suspend fun getNextUnreadChapter(manga: Manga): Chapter? {
         val chapters = getChaptersByMangaId.await(manga.id, applyScanlatorFilter = true)
+            .withoutCustomExcluded(getExcludedScanlators.await(manga.id))
         return withContext(Dispatchers.Default) { chapters.getNextUnread(manga, downloadManager) }
     }
 

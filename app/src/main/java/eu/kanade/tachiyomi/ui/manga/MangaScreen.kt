@@ -293,6 +293,7 @@ class MangaScreen(
             ScanlatorFilterDialog(
                 availableScanlators = successState.availableScanlators,
                 excludedScanlators = successState.excludedScanlators,
+                customScanlators = successState.customScanlators,
                 onDismissRequest = { showScanlatorsDialog = false },
                 onConfirm = viewModel::setExcludedScanlators,
             )

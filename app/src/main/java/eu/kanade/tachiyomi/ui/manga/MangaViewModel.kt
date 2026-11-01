@@ -24,6 +24,9 @@ import eu.kanade.core.util.addOrRemove
 import eu.kanade.core.util.insertSeparators
 import eu.kanade.domain.chapter.interactor.GetAvailableScanlators
 import eu.kanade.domain.chapter.interactor.SetReadStatus
+import eu.kanade.domain.chapter.model.customScanlatorKeywords
+import eu.kanade.domain.chapter.model.matchesAnyKeyword
+import eu.kanade.domain.chapter.service.CustomScanlatorPreferences
 import eu.kanade.domain.manga.interactor.GetExcludedScanlators
 import eu.kanade.domain.manga.interactor.SetExcludedScanlators
 import eu.kanade.domain.manga.interactor.UpdateManga
@@ -125,6 +128,7 @@ class MangaViewModel(
     private val getAvailableScanlators: GetAvailableScanlators,
     private val getExcludedScanlators: GetExcludedScanlators,
     private val setExcludedScanlators: SetExcludedScanlators,
+    private val customScanlatorPreferences: CustomScanlatorPreferences,
     private val setMangaChapterFlags: SetMangaChapterFlags,
     private val setMangaDefaultChapterFlags: SetMangaDefaultChapterFlags,
     private val setReadStatus: SetReadStatus,
@@ -230,7 +234,8 @@ class MangaViewModel(
     private val scanlators = combine(
         getAvailableScanlators.subscribe(mangaId).distinctUntilChanged(),
         getExcludedScanlators.subscribe(mangaId).distinctUntilChanged(),
-        ::Pair,
+        customScanlatorPreferences.keywords(mangaId).changes().distinctUntilChanged(),
+        ::Triple,
     )
 
     private val trackers = flow { emit(sourceManager.getOrStub(getMangaAndChapters.awaitManga(mangaId).source)) }
@@ -257,16 +262,23 @@ class MangaViewModel(
         combine(dialog, isRefreshingData, ::Pair),
     ) {
             mangaAndChapters,
-            (availableScanlators, excludedScanlators),
+            (availableScanlators, excludedScanlators, customScanlators),
             (trackingCount, hasLoggedInTrackers),
             (selectedIds, downloads),
             (dialog, isRefreshingData),
         ->
+        // Locally created scanlators match the chapter name, which the database can't filter on
+        val excludedKeywords = excludedScanlators.customScanlatorKeywords()
+        val visibleChapters = if (excludedKeywords.isEmpty()) {
+            mangaAndChapters.chapters
+        } else {
+            mangaAndChapters.chapters.filterNot { it.chapter.name.matchesAnyKeyword(excludedKeywords) }
+        }
         State.Success(
             manga = mangaAndChapters.manga,
             source = mangaAndChapters.source,
             isFromSource = isFromSource,
-            chapters = mangaAndChapters.chapters.map { item ->
+            chapters = visibleChapters.map { item ->
                 val downloadState = downloads[item.id]
                 val selected = item.id in selectedIds
                 if (downloadState == null && !selected) return@map item
@@ -277,6 +289,7 @@ class MangaViewModel(
             },
             availableScanlators = availableScanlators,
             excludedScanlators = excludedScanlators,
+            customScanlators = customScanlators,
             trackingCount = trackingCount,
             hasLoggedInTrackers = hasLoggedInTrackers,
             isRefreshingData = isRefreshingData,
@@ -1085,7 +1098,8 @@ class MangaViewModel(
         dialog.value = Dialog.Migrate(target = manga, current = duplicate)
     }
 
-    fun setExcludedScanlators(excludedScanlators: Set<String>) {
+    fun setExcludedScanlators(excludedScanlators: Set<String>, customScanlators: Set<String>) {
+        customScanlatorPreferences.keywords(mangaId).set(customScanlators)
         viewModelScope.launch {
             setExcludedScanlators.await(mangaId, excludedScanlators)
         }
@@ -1105,6 +1119,7 @@ class MangaViewModel(
             val chapters: List<ChapterList.Item>,
             val availableScanlators: Set<String>,
             val excludedScanlators: Set<String>,
+            val customScanlators: Set<String>,
             val trackingCount: Int = 0,
             val hasLoggedInTrackers: Boolean = false,
             val isRefreshingData: Boolean = false,
@@ -1168,7 +1183,8 @@ class MangaViewModel(
             }
 
             val scanlatorFilterActive: Boolean
-                get() = excludedScanlators.intersect(availableScanlators).isNotEmpty()
+                get() = excludedScanlators.intersect(availableScanlators).isNotEmpty() ||
+                    excludedScanlators.customScanlatorKeywords().isNotEmpty()
 
             val filterActive: Boolean
                 get() = scanlatorFilterActive || manga.chaptersFiltered()

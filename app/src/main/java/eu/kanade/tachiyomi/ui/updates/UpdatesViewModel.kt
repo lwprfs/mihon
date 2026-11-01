@@ -17,6 +17,9 @@ import eu.kanade.core.preference.asState
 import eu.kanade.core.util.addOrRemove
 import eu.kanade.core.util.insertSeparators
 import eu.kanade.domain.chapter.interactor.SetReadStatus
+import eu.kanade.domain.chapter.model.customScanlatorKeywords
+import eu.kanade.domain.chapter.model.matchesAnyKeyword
+import eu.kanade.domain.manga.interactor.GetExcludedScanlators
 import eu.kanade.presentation.manga.components.ChapterDownloadAction
 import eu.kanade.presentation.updates.UpdatesUiModel
 import eu.kanade.tachiyomi.data.download.DownloadCache
@@ -77,6 +80,7 @@ class UpdatesViewModel(
     private val updateChapter: UpdateChapter,
     private val setReadStatus: SetReadStatus,
     private val getUpdates: GetUpdates,
+    private val getExcludedScanlators: GetExcludedScanlators,
     private val getManga: GetManga,
     private val getChapter: GetChapter,
     private val libraryPreferences: LibraryPreferences,
@@ -173,7 +177,11 @@ class UpdatesViewModel(
                     hideExcludedScanlators = it.filterExcludedScanlators,
                     includedCategories = it.filterIncludedCategories,
                     excludedCategories = it.filterExcludedCategories,
-                ).distinctUntilChanged()
+                )
+                    .map { updates ->
+                        if (it.filterExcludedScanlators) updates.withoutCustomExcluded() else updates
+                    }
+                    .distinctUntilChanged()
             },
         downloadCache.changes.pausedWhileUnsubscribed(),
         downloadManager.queueState.pausedWhileUnsubscribed(),
@@ -229,6 +237,20 @@ class UpdatesViewModel(
 
         return fastFilter {
             filterFnDownloaded(it)
+        }
+    }
+
+    /**
+     * The SQL filter only knows the scanlator, so the locally created scanlators, which match the chapter name, are
+     * applied here.
+     */
+    private suspend fun List<UpdatesWithRelations>.withoutCustomExcluded(): List<UpdatesWithRelations> {
+        val keywordsByMangaId = map { it.mangaId }.distinct().associateWith { mangaId ->
+            getExcludedScanlators.await(mangaId).customScanlatorKeywords()
+        }
+        return filterNot { update ->
+            val keywords = keywordsByMangaId[update.mangaId].orEmpty()
+            keywords.isNotEmpty() && update.chapterName.matchesAnyKeyword(keywords)
         }
     }
 
