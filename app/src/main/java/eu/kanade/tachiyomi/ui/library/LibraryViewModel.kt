@@ -494,7 +494,9 @@ class LibraryViewModel(
     suspend fun getNextUnreadChapter(manga: Manga): Chapter? {
         val chapters = getChaptersByMangaId.await(manga.id, applyScanlatorFilter = true)
             .withoutCustomExcluded(getExcludedScanlators.await(manga.id))
-        return withContext(Dispatchers.Default) { chapters.getNextUnread(manga, downloadManager) }
+        return withContext(Dispatchers.Default) {
+            chapters.getNextUnread(manga, preferences.downloadedOnly.get(), downloadManager)
+        }
     }
 
     /**
